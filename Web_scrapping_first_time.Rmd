@@ -1,0 +1,128 @@
+---
+title: "Web scraping first time"
+subtitle : "IMBD"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning = FALSE)
+```
+
+```{r}
+library("rvest")
+library("tidyverse")
+library("stringr")
+
+
+read_webpg <- read_html("https://www.imdb.com/list/ls041125816/")
+```
+
+
+
+## Titre
+
+```{r}
+titre <- read_webpg %>%
+         html_nodes(".lister-item-header")%>%
+         html_text() %>%
+         str_replace_all(.,"[:digit:]","")%>%
+         str_replace_all(.,"\\\n","")%>%
+         str_replace_all("[:blank:]","")%>%
+         str_replace_all("[:punct:]","")
+
+
+titre[17] <- '1917'
+length(titre)
+```
+
+
+
+## Genre
+```{r}
+genre <- read_webpg %>%
+         html_nodes(".genre")%>%
+         html_text()%>%
+         str_replace_all(.,"[\r\n]","")%>%
+         str_replace_all(.,"\\s","")
+      
+
+length(genre)                     
+
+```
+
+
+## Score
+```{r}
+read_webpg %>%
+  html_nodes("span.ipl-rating-star__rating")%>%
+  html_text() -> rate
+
+
+rate_nb <- rate[seq(1,length(rate),23)]
+
+length(rate_nb)
+
+```
+
+
+
+
+## Directors 
+```{r}
+
+read_webpg %>%
+  html_nodes('p.text-muted + a' )%>%
+  html_text()
+
+```
+
+
+to Fix , #add director # add description
+
+
+## Data frame
+
+```{r}
+
+df <- data.frame(titre = titre , genre = genre , score = rate_nb,stringsAsFactors = F)
+row.names(df) <- NULL
+
+```
+
+
+
+```{r  ,fig.width=12}
+df %>%
+  arrange(desc(score))%>%
+  top_n(20)%>%
+  mutate(score = as.numeric(score),
+         titre= fct_reorder(titre,score))%>%
+  ggplot(mapping = aes(x = titre , y = score , fill = as.factor(genre)))+
+  geom_bar(stat = "identity")+
+  theme_minimal()+
+  coord_flip()+
+  guides(fill = guide_legend( reverse = TRUE))+
+  labs(fill = "Genre" , title = "Top 20 films en 2019 d'après IMDB", caption = "Source IMDB")+
+  theme(legend.text = element_text(size = 8))
+```
+
+```{r}
+library(fishualize)
+
+df %>%
+  group_by(genre)%>%
+  mutate(nb = n(),
+        score = as.numeric(score))%>%
+  filter(nb > 1 ) %>%
+  summarise(avg_score = mean(score))%>%
+  mutate(genre = fct_reorder(genre,avg_score))%>%
+  ggplot(mapping = aes(x = genre , y = avg_score,fill = genre))+
+  geom_bar(stat = "identity")+
+  scale_fill_fish_d(option = "Balistapus_undulatus")+
+  coord_flip() +  guides(fill = guide_legend( reverse = TRUE))+
+  theme(legend.position = "")+
+  labs(y = "Average score" , x = "Genre" )
+
+```
+
+Next time add comment and do a lasso regression to check how words (theme of moovie) influence the rating of the movie
