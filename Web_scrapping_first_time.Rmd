@@ -1,0 +1,230 @@
+---
+title: "Web scraping first time"
+subtitle : "IMBD"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning = FALSE)
+```
+
+```{r}
+library("rvest")
+library("tidyverse")
+library("stringr")
+library("tidytext")
+library("glmnet")
+theme_set(theme_minimal())
+
+read_webpg <- read_html("https://www.imdb.com/list/ls041125816/")
+```
+
+
+
+## Titre
+
+```{r}
+titre <- read_webpg %>%
+         html_nodes(".lister-item-header")%>%
+         html_text() %>%
+         str_replace_all(.,"[:digit:]","")%>%
+         str_replace_all(.,"\\\n","")%>%
+         str_replace_all("[:punct:]","") %>%
+         str_replace_all(.,"\\s\\I","") %>%
+         str_trim(side = "both")
+
+titre[17] <- '1917'
+length(titre)
+```
+
+
+
+## Genre
+```{r}
+genre <- read_webpg %>%
+         html_nodes(".genre")%>%
+         html_text()%>%
+         str_replace_all(.,"[\r\n]","")%>%
+         str_replace_all(.,"\\s","")
+      
+
+length(genre)                     
+
+```
+
+
+## Score
+```{r}
+read_webpg %>%
+  html_nodes("span.ipl-rating-star__rating")%>%
+  html_text() -> rate
+
+
+rate_nb <- rate[seq(1,length(rate),23)]
+
+length(rate_nb)
+
+```
+
+
+
+
+## Directors 
+```{r}
+
+directors <- read_webpg %>%
+  html_nodes('.text-small a:nth-child(1)' )%>%
+  html_text()
+
+directors  <- directors[-1]
+
+length(directors)
+```
+
+
+
+## Stars 
+
+
+```{r}
+Principal_stars <- read_webpg %>%
+                   html_nodes(".text-small:nth-child(5) a:nth-child(1) , .ghost+ a") %>%
+                   html_text()
+
+length(Principal_stars)
+```
+
+
+
+## Review
+.ipl-rating-widget+ p , .ratings-metascore+ p
+
+
+```{r}
+review <- read_webpg %>%
+  html_nodes(".ipl-rating-widget+ p , .ratings-metascore+ p")%>%
+  html_text()%>%
+  str_replace_all(.,"\n","")%>%
+  str_trim()
+
+length(review)
+
+```
+
+
+to Fix , #add director # add description
+
+
+## Data frame
+
+```{r}
+
+df <- data.frame(titre = titre , genre = genre , score = rate_nb,directors = directors , actor_1 = Principal_stars , review = review,stringsAsFactors = F)
+row.names(df) <- NULL
+
+view(df)
+
+```
+
+
+
+```{r  ,fig.width=12}
+df %>%
+  select(-review)%>%
+  arrange(desc(score))%>%
+  head(20)%>%
+  mutate(score = as.numeric(score),
+         titre= fct_reorder(titre,score))%>%
+  ggplot(mapping = aes(x = titre , y = score , fill = as.factor(genre)))+
+  geom_bar(stat = "identity")+
+  theme_minimal()+
+  coord_flip()+
+  guides(fill = guide_legend( reverse = TRUE))+
+  labs(fill = "Genre" , title = "Top 20 films en 2019 d'après IMDB", caption = "Source IMDB")+
+  theme(legend.text = element_text(size = 8))
+```
+
+```{r}
+library(fishualize)
+
+df %>%
+  group_by(genre)%>%
+  mutate(nb = n(),
+        score = as.numeric(score))%>%
+  filter(nb > 1 ) %>%
+  summarise(avg_score = mean(score))%>%
+  mutate(genre = fct_reorder(genre,avg_score))%>%
+  ggplot(mapping = aes(x = genre , y = avg_score,fill = genre))+
+  geom_bar(stat = "identity")+
+  scale_fill_fish_d(option = "Balistapus_undulatus")+
+  coord_flip() +  guides(fill = guide_legend( reverse = TRUE))+
+  theme(legend.position = "")+
+  labs(y = "Average score" , x = "Genre" )
+
+```
+
+Next time add comment and do a lasso regression to check how words (theme of moovie) influence the rating of the movie
+
+
+
+Analysing actors & Directors
+
+
+```{r}
+df %>%
+  count(directors,sort = TRUE) #Only Jeff Chan directed 2 moovies in the top 100
+
+liste_actors <- df %>%
+  count(actor_1,sort = TRUE)%>%
+  filter(n >1)%>%
+  pull(actor_1)
+```
+
+```{r}
+
+df %>%
+  filter(actor_1 %in% liste_actors)%>%
+  view()
+
+```
+
+
+
+```{r}
+features_1 <- df %>%
+  unnest_tokens(word,review)%>%
+  anti_join(stop_words,by = "word")%>%
+  add_count(word) %>%
+  separate_rows(genre  ,sep  =",")%>%
+  mutate(genre_row = paste0(genre,":",word))%>%
+  select(-score) %>%
+    mutate(value = 1)
+
+
+feat_mat <- features_1 %>%
+  cast_sparse(titre,genre_row)
+
+feat_mat
+
+dim(feat_mat)
+
+df$score <- as.numeric(df$score)
+
+score <- df$score[match(rownames(feat_mat),df$titre)]
+
+modele <- cv.glmnet(feat_mat,score)
+
+plot(modele)
+
+
+tidy(modele$glmnet.fit) %>%
+  mutate(lambda  = round(lambda,3)) %>% 
+  filter(lambda == 0.118, term != "(Intercept)", abs(round(estimate , 3)) > 0.005)%>%
+  mutate(term = fct_reorder(term,estimate))%>%
+  ggplot(mapping = aes(x = term , y = estimate, fill = estimate >0 ))+
+  geom_col()+
+  coord_flip()+
+  labs(x = "Terme", y = "" , title = "Influence des termes(genre et mot-clés dans le review) sur le score du film " , fill = "Terme positif ? " )
+```
+
+
